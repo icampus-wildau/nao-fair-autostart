@@ -2,8 +2,10 @@
 # Copy this checkout onto a NAO and register autostart.
 # Usage: sh packaging/install_on_nao.sh nao@ROBOT_IP
 #
+# packaging/install.sh downloads main and calls this script. Use this file
+# directly to copy a checkout that is not on main yet.
 # Detecting whether the process is already installed, and installing it from
-# the NAO Fair app, is a later step. This script is the manual copy.
+# the NAO Fair app, is a later step.
 
 set -eu
 
@@ -12,7 +14,47 @@ if [ "$#" -ne 1 ]; then
   exit 1
 fi
 
-ROBOT=$1
+trim_field() {
+  field=$(printf '%s' "$1" | tr -d '\r')
+  field=${field#"${field%%[![:space:]]*}"}
+  field=${field%"${field##*[![:space:]]}"}
+  printf '%s' "$field"
+}
+
+ssh_name_ok() {
+  case "$1" in
+    ""|-*)
+      return 1
+      ;;
+    *[!A-Za-z0-9._-]*)
+      return 1
+      ;;
+  esac
+}
+
+raw=$(trim_field "$1")
+case "$raw" in
+  *@*)
+    login=$(trim_field "${raw%@*}")
+    host=$(trim_field "${raw##*@}")
+    ;;
+  *)
+    login=nao
+    host=$raw
+    ;;
+esac
+case "$host" in
+  *" ("*")")
+    host=$(trim_field "${host%% (*}")
+    ;;
+esac
+if ! ssh_name_ok "$login" || ! ssh_name_ok "$host"; then
+  echo "Cannot connect to '$raw'." >&2
+  echo "ssh rejects that address (hostname contains invalid characters)." >&2
+  echo "Enter the robot IP on its own, for example 192.168.2.57." >&2
+  exit 1
+fi
+ROBOT=$login@$host
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 REMOTE_DIR=/home/nao/nao-fair-autostart
 CONTROL_DIR=$(mktemp -d)
