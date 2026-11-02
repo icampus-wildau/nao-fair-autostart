@@ -3,7 +3,7 @@
 # The first invocation returns immediately so NAOqi's [program] autoload
 # does not wait on the restart loop.
 
-AUTOSTART_HOME=${NAO_FAIR_AUTOSTART_HOME:-/home/nao/nao-fair-autostart}
+AUTOSTART_HOME=${NAO_FAIR_AUTOSTART_HOME:-$(CDPATH= cd -- "$(dirname "$0")" && pwd)}
 cd "$AUTOSTART_HOME" || exit 1
 
 PIDFILE=$AUTOSTART_HOME/run_forever.pid
@@ -20,9 +20,10 @@ autostart_pids() {
         printf '%s\n' "$pid"
         ;;
       *run_forever.sh*)
+        # Match this install only, so the microphone bridge supervisor is left alone.
         case "$cmd" in
           *" stop"*) ;;
-          *) printf '%s\n' "$pid" ;;
+          *"$AUTOSTART_HOME"/run_forever.sh*|*"$0"*) printf '%s\n' "$pid" ;;
         esac
         ;;
     esac

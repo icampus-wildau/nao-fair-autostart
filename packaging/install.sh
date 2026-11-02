@@ -3,6 +3,9 @@
 #
 #   curl -LsSf https://raw.githubusercontent.com/icampus-wildau/nao-fair-autostart/main/packaging/install.sh | sh
 #
+# The copy from main downloads the latest GitHub release and runs the script
+# inside that release. Running this file from a checkout installs that checkout.
+#
 # Asks for the robot IP and the nao user's password when they are not already
 # set. A password typed at the prompt is handed to ssh through SSH_ASKPASS and
 # is not passed as an argument. The same helper answers a new host key on the
@@ -15,8 +18,7 @@
 set -eu
 
 REPO=https://github.com/icampus-wildau/nao-fair-autostart
-BRANCH=main
-NAO_USER=nao
+NAO_USER=${NAO_USER:-nao}
 
 usage() {
   cat <<EOF
@@ -176,16 +178,45 @@ trap cleanup EXIT
 trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 
-echo "Downloading $REPO ($BRANCH)"
-fetch "$REPO/archive/refs/heads/$BRANCH.tar.gz" "$WORKDIR/autostart.tar.gz"
+self=$0
+ROOT=
+if [ -f "$self" ]; then
+  maybe=$(CDPATH= cd -- "$(dirname "$self")/.." && pwd)
+  if [ -f "$maybe/autostart_service.py" ]; then
+    ROOT=$maybe
+  fi
+fi
 
-mkdir -p "$WORKDIR/src"
-gzip -dc "$WORKDIR/autostart.tar.gz" | tar -xf - -C "$WORKDIR/src"
-
-ROOT=$WORKDIR/src/nao-fair-autostart-$BRANCH
-if [ ! -f "$ROOT/autostart_service.py" ]; then
-  echo "Download has no autostart_service.py under $ROOT" >&2
-  exit 1
+if [ -z "$ROOT" ]; then
+  echo "Downloading the latest release of $REPO"
+  fetch "https://api.github.com/repos/icampus-wildau/nao-fair-autostart/releases/latest" "$WORKDIR/release.json"
+  py=python3
+  command -v python3 >/dev/null 2>&1 || py=python
+  meta=$("$py" - "$WORKDIR/release.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+if data.get("draft") or data.get("prerelease"):
+    sys.stderr.write("The latest GitHub release cannot be installed.\n")
+    sys.exit(1)
+sys.stdout.write(data["tag_name"] + "\n" + data["tarball_url"] + "\n")
+PY
+)
+  NAO_PROGRAM_VERSION=$(printf '%s\n' "$meta" | sed -n '1p')
+  tarball=$(printf '%s\n' "$meta" | sed -n '2p')
+  export NAO_PROGRAM_VERSION
+  fetch "$tarball" "$WORKDIR/autostart.tar.gz"
+  mkdir -p "$WORKDIR/src"
+  gzip -dc "$WORKDIR/autostart.tar.gz" | tar -xf - -C "$WORKDIR/src"
+  found=$(find "$WORKDIR/src" -type f -name autostart_service.py | head -n 1)
+  if [ -z "$found" ]; then
+    echo "Release has no autostart_service.py" >&2
+    exit 1
+  fi
+  ROOT=$(CDPATH= cd -- "$(dirname "$found")" && pwd)
+  export NAO_IP=$IP
+  export NAO_PASSWORD
+  sh "$ROOT/packaging/install.sh" --ip "$IP" --user "$NAO_USER"
+  exit $?
 fi
 
 ASKPASS=$WORKDIR/askpass
@@ -202,6 +233,10 @@ case "${SSH_ASKPASS_PROMPT:-}" in
 esac
 case "$prompt" in
   *yes/no*|*[Ff]ingerprint*|*authenticity*)
+    if [ -n "${NAO_KNOWN_HOSTS:-}" ]; then
+      echo "SSH asked to confirm a host key: $prompt" >&2
+      exit 1
+    fi
     if [ ! -r /dev/tty ] || [ ! -w /dev/tty ]; then
       echo "No terminal to confirm the SSH host key." >&2
       exit 1
@@ -221,5 +256,5 @@ export SSH_ASKPASS=$ASKPASS
 export SSH_ASKPASS_REQUIRE=force
 export DISPLAY="${DISPLAY:-:0}"
 
-echo "Installing on $NAO_USER@$IP from the $BRANCH branch."
+echo "Installing on $NAO_USER@$IP."
 sh "$ROOT/packaging/install_on_nao.sh" "$NAO_USER@$IP"

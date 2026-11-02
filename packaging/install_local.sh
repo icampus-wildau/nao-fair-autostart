@@ -81,16 +81,18 @@ if ! command -v python >/dev/null 2>&1; then
 fi
 
 echo "Installing NAO Fair autostart into $DEST"
-mkdir -p "$DEST/nao_fair_autostart" "$HOME/naoqi/preferences"
-cp "$ROOT/autostart_service.py" "$DEST/autostart_service.py"
-cp "$ROOT/nao_fair_autostart/"*.py "$DEST/nao_fair_autostart/"
-cp "$ROOT/packaging/run_forever.sh" "$DEST/run_forever.sh"
-cp "$ROOT/packaging/register_autoload.py" "$DEST/register_autoload.py"
-chmod 755 "$DEST/run_forever.sh" "$DEST/autostart_service.py"
-
-python "$DEST/register_autoload.py" "$AUTOLOAD" "$DEST/run_forever.sh"
-"$DEST/run_forever.sh" stop || true
-NAO_FAIR_AUTOSTART_HOME=$DEST "$DEST/run_forever.sh"
+STAGE=$DEST.stage
+rm -rf "$STAGE"
+mkdir -p "$STAGE/nao_fair_autostart" "$HOME/naoqi/preferences"
+cp "$ROOT/autostart_service.py" "$STAGE/autostart_service.py"
+cp "$ROOT/nao_fair_autostart/"*.py "$STAGE/nao_fair_autostart/"
+cp "$ROOT/packaging/run_forever.sh" "$STAGE/run_forever.sh"
+cp "$ROOT/packaging/register_autoload.py" "$STAGE/register_autoload.py"
+cp "$ROOT/packaging/replace_tree.sh" "$STAGE/replace_tree.sh"
+chmod 755 "$STAGE/run_forever.sh" "$STAGE/autostart_service.py" "$STAGE/replace_tree.sh"
+NAO_CANON=$DEST NAO_STAGE=$STAGE NAO_MARKER=autostart_service.py \
+  NAO_HOME_TOKEN=nao-fair-autostart NAO_KEEP=assignment.json NAO_REGISTER=1 \
+  NAO_AUTOLOAD=$AUTOLOAD "$STAGE/replace_tree.sh"
 
 cat <<EOF
 Installed into $DEST.

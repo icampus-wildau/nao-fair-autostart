@@ -2,10 +2,8 @@
 # Copy this checkout onto a NAO and register autostart.
 # Usage: sh packaging/install_on_nao.sh nao@ROBOT_IP
 #
-# packaging/install.sh downloads main and calls this script. Use this file
-# directly to copy a checkout that is not on main yet.
-# Detecting whether the process is already installed, and installing it from
-# the NAO Fair app, is a later step.
+# packaging/install.sh downloads the latest release and calls this script. Use this file
+# directly to copy a checkout that is not in a release yet.
 
 set -eu
 
@@ -60,12 +58,21 @@ REMOTE_DIR=/home/nao/nao-fair-autostart
 CONTROL_DIR=$(mktemp -d)
 CONTROL_PATH=$CONTROL_DIR/ssh.sock
 
+ssh_base() {
+  if [ -n "${NAO_KNOWN_HOSTS:-}" ]; then
+    printf '%s\n' -o "UserKnownHostsFile=$NAO_KNOWN_HOSTS" -o StrictHostKeyChecking=yes
+  fi
+  printf '%s\n' -o ControlMaster=auto -o "ControlPath=$CONTROL_PATH" -o ControlPersist=120
+}
+
 ssh_nao() {
-  ssh -o ControlMaster=auto -o ControlPath="$CONTROL_PATH" -o ControlPersist=120 "$@"
+  # shellcheck disable=SC2046
+  ssh $(ssh_base) "$@"
 }
 
 scp_nao() {
-  scp -O -o ControlMaster=auto -o ControlPath="$CONTROL_PATH" -o ControlPersist=120 "$@"
+  # shellcheck disable=SC2046
+  scp -O $(ssh_base) "$@"
 }
 
 cleanup() {
@@ -76,19 +83,23 @@ trap cleanup EXIT
 trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 
+STAGE=$REMOTE_DIR.stage
 echo "Installing NAO Fair autostart on $ROBOT"
 if [ -z "${SSH_ASKPASS:-}" ]; then
   echo "Enter the SSH password once. The rest of the install reuses that login."
 fi
-ssh_nao "$ROBOT" "mkdir -p '$REMOTE_DIR/nao_fair_autostart' /home/nao/naoqi/preferences"
-scp_nao "$ROOT/autostart_service.py" "$ROBOT:$REMOTE_DIR/autostart_service.py"
-scp_nao "$ROOT/nao_fair_autostart/"*.py "$ROBOT:$REMOTE_DIR/nao_fair_autostart/"
-scp_nao "$ROOT/packaging/run_forever.sh" "$ROBOT:$REMOTE_DIR/run_forever.sh"
-scp_nao "$ROOT/packaging/register_autoload.py" "$ROBOT:$REMOTE_DIR/register_autoload.py"
-ssh_nao "$ROBOT" "chmod 755 '$REMOTE_DIR/run_forever.sh' '$REMOTE_DIR/autostart_service.py'"
-ssh_nao "$ROBOT" "python '$REMOTE_DIR/register_autoload.py'"
-ssh_nao "$ROBOT" "'$REMOTE_DIR/run_forever.sh' stop" || true
-ssh_nao "$ROBOT" "'$REMOTE_DIR/run_forever.sh'"
+ssh_nao "$ROBOT" "rm -rf '$STAGE' && mkdir -p '$STAGE/nao_fair_autostart' /home/nao/naoqi/preferences"
+scp_nao "$ROOT/autostart_service.py" "$ROBOT:$STAGE/autostart_service.py"
+scp_nao "$ROOT/nao_fair_autostart/"*.py "$ROBOT:$STAGE/nao_fair_autostart/"
+scp_nao "$ROOT/packaging/run_forever.sh" "$ROBOT:$STAGE/run_forever.sh"
+scp_nao "$ROOT/packaging/register_autoload.py" "$ROBOT:$STAGE/register_autoload.py"
+scp_nao "$ROOT/packaging/replace_tree.sh" "$ROBOT:$STAGE/replace_tree.sh"
+if [ -n "${NAO_PROGRAM_VERSION:-}" ]; then
+  printf '%s\n' "$NAO_PROGRAM_VERSION" > "$CONTROL_DIR/VERSION"
+  scp_nao "$CONTROL_DIR/VERSION" "$ROBOT:$STAGE/VERSION"
+fi
+ssh_nao "$ROBOT" "chmod 755 '$STAGE/run_forever.sh' '$STAGE/autostart_service.py' '$STAGE/replace_tree.sh'"
+ssh_nao "$ROBOT" "NAO_CANON='$REMOTE_DIR' NAO_STAGE='$STAGE' NAO_MARKER='autostart_service.py' NAO_HOME_TOKEN='nao-fair-autostart' NAO_KEEP='assignment.json' NAO_REGISTER=1 '$STAGE/replace_tree.sh'"
 
 cat <<EOF
 Installed on $ROBOT.

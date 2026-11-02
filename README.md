@@ -6,7 +6,7 @@ While the NAO Fair app is connected it renews a lease through NAOqi about once a
 
 The process speaks with the robot's own TTS, stops speech, waves, nods, shakes, sits, stands, and stops a gesture. Gespräch beenden stops speech. Gespräch starten, Gespräch umschalten, and Gespräch beenden und Kontext löschen do nothing here.
 
-Installing it from the NAO Fair app, and detecting that it is already present, comes later.
+The NAO Fair app installs this process from its system tab. A robot without this process still accepts a connection. The app reports that the autostart assignment was not stored.
 
 This is a separate process. Do not add it under `[python]` in `autoload.ini`. That section runs inside NAOqi. The install registers `/home/nao/nao-fair-autostart/run_forever.sh` under `[program]` instead.
 
@@ -18,7 +18,7 @@ On Linux use a terminal with `curl` (or download the script with `wget`), OpenSS
 curl -LsSf https://raw.githubusercontent.com/icampus-wildau/nao-fair-autostart/main/packaging/install.sh | sh
 ```
 
-The script downloads the `main` branch, asks for the NAO IP and the `nao` password, copies the files, registers autoload, and starts the process. The first connection prints the robot's SSH host key and waits for `yes`. The address is the IP on its own, for example `192.168.2.57`.
+The script downloads the latest GitHub release and runs the installer inside that release. It asks for the NAO IP and the `nao` password, copies the files, registers autoload, and starts the process. The first connection prints the robot's SSH host key and waits for `yes`. The address is the IP on its own, for example `192.168.2.57`.
 
 ## Install while logged in on the robot
 
@@ -39,8 +39,6 @@ sh packaging/install_on_nao.sh nao@ROBOT_IP
 ```
 
 The script asks for the `nao` SSH password, copies the files to `/home/nao/nao-fair-autostart/`, registers autoload, and starts the process.
-
-A robot without this process still accepts a NAO Fair app connection. The app reports that the autostart assignment was not stored.
 
 ## On the robot
 

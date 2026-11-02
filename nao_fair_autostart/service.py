@@ -7,6 +7,7 @@ import qi, so the decision logic can be tested on a laptop.
 from __future__ import print_function
 
 import logging
+import os
 import threading
 import time
 
@@ -17,6 +18,7 @@ from nao_fair_autostart.contract import (
     LEASE_ACK_SEQ,
     LEASE_COMMAND,
     LEASE_SEQ,
+    VERSION,
     fold_phrase,
     memory_event,
     parse_assignment,
@@ -57,6 +59,7 @@ class Service(object):
         self._worker = None
         self._lock = threading.Lock()
     def start(self):
+        self._publish_version()
         stored = _read_quietly(self.store_path)
         if stored is not None:
             self._apply(self.engine.load(stored))
@@ -68,6 +71,24 @@ class Service(object):
         ticker.daemon = True
         ticker.start()
 
+    def _publish_version(self):
+        home = os.path.dirname(self.store_path)
+        path = os.path.join(home, "VERSION")
+        try:
+            handle = open(path)
+        except IOError:
+            return
+        try:
+            text = handle.read().strip()
+        finally:
+            handle.close()
+        if not text:
+            return
+        try:
+            self.memory.insertData(VERSION, text)
+        except Exception:
+            logger.exception("Could not publish the autostart version")
+
     def _subscribe(self, name, callback):
         subscriber = self.memory.subscriber(name)
         subscriber.signal.connect(callback)
@@ -77,9 +98,10 @@ class Service(object):
         def callback(value):
             if not value:
                 return
-            action = self.engine.press(sensor_id)
-            if action is not None:
-                self._start_action(action)
+            with self._lock:
+                action = self.engine.press(sensor_id)
+                if action is not None:
+                    self._start_action(action)
 
         return callback
 
@@ -90,8 +112,9 @@ class Service(object):
         except Exception:
             logger.exception("Could not store the autostart assignment")
             return
+        with self._lock:
+            self._apply(self.engine.load(document))
         self._raise(ACK_SEQ, int(seq))
-        self._apply(self.engine.load(document))
 
     def _on_lease(self, seq):
         try:
@@ -99,21 +122,26 @@ class Service(object):
         except Exception:
             logger.exception("Could not read the autostart lease")
             return
-        now = self.now()
-        if command == "release":
-            effects = self.engine.release(now)
-        else:
-            effects = self.engine.hold(int(seq), now)
-        self._apply(effects)
-        if command != "release":
-            self._raise(LEASE_ACK_SEQ, int(seq))
+        with self._lock:
+            now = self.now()
+            if command == "release":
+                effects = self.engine.release(now)
+            else:
+                effects = self.engine.hold(int(seq), now)
+            self._apply(effects)
+            if command != "release":
+                worker = self._worker
+                if worker is not None and worker.is_alive():
+                    worker.join()
+                self._raise(LEASE_ACK_SEQ, int(seq))
 
     def _tick(self):
         while not self._stop.is_set():
             self._stop.wait(1.0)
             if self._stop.is_set():
                 return
-            self._apply(self.engine.tick(self.now()))
+            with self._lock:
+                self._apply(self.engine.tick(self.now()))
 
     def _apply(self, effects):
         for effect in effects:

@@ -16,6 +16,7 @@ ACK_SEQ = "NAOFair/Autostart/AckSeq"
 LEASE_COMMAND = "NAOFair/Autostart/LeaseCommand"
 LEASE_SEQ = "NAOFair/Autostart/LeaseSeq"
 LEASE_ACK_SEQ = "NAOFair/Autostart/LeaseAckSeq"
+VERSION = "NAOFair/Autostart/Version"
 
 LEASE_TIMEOUT_SECS = 20.0
 
