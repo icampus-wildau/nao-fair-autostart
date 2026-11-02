@@ -6,7 +6,7 @@ still owns the triggers, so a skewed wall clock cannot expire the lease early.
 
 from __future__ import print_function
 
-from nao_fair_autostart.contract import LEASE_TIMEOUT_SECS, action_for
+from nao_fair_autostart.contract import LEASE_TIMEOUT_SECS, gesture_action
 
 
 class AutostartEngine(object):
@@ -50,11 +50,11 @@ class AutostartEngine(object):
         self.lease_seq = None
         return ["stop_all"] + self._sync_handling(entered=False)
 
-    def press(self, sensor_id):
+    def press(self, sensor_id, gesture="tap"):
         if not self.handling or not self.assignment:
             return None
         triggers = self.assignment.get("triggers") or {}
-        return action_for(triggers.get(sensor_id))
+        return gesture_action(triggers.get(sensor_id), gesture)
 
     def _armed(self):
         return bool(self.assignment and self.assignment.get("armed"))

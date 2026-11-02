@@ -12,6 +12,8 @@ import re
 
 ASSIGNMENT = "NAOFair/Autostart/Assignment"
 ASSIGNMENT_SEQ = "NAOFair/Autostart/AssignmentSeq"
+POSITION = "NAOFair/Dialog/Position"
+POSITION_SEQ = "NAOFair/Dialog/PositionSeq"
 ACK_SEQ = "NAOFair/Autostart/AckSeq"
 LEASE_COMMAND = "NAOFair/Autostart/LeaseCommand"
 LEASE_SEQ = "NAOFair/Autostart/LeaseSeq"
@@ -72,6 +74,18 @@ def parse_assignment(raw):
         raise ValueError("triggers must be an object")
     if set(triggers) != set(_SENSORS):
         raise ValueError("triggers must contain the seven sensors")
+    upgraded = {}
+    for sensor_id in _SENSORS:
+        upgraded[sensor_id] = upgrade_trigger(triggers[sensor_id])
+    data["triggers"] = upgraded
+    dialogs = data.get("dialogs", [])
+    if not isinstance(dialogs, list):
+        raise ValueError("dialogs must be a list")
+    data["dialogs"] = dialogs
+    active = data.get("active_dialog_id")
+    if active is not None and not isinstance(active, basestring_type()):
+        raise ValueError("active dialog is invalid")
+    data["active_dialog_id"] = text_of(active) if active else None
     volume = data.get("volume")
     speed = data.get("speech_speed")
     if not isinstance(volume, int) or isinstance(volume, bool) or not 0 <= volume <= 100:
@@ -97,8 +111,47 @@ def parse_assignment(raw):
     return data
 
 
+def upgrade_trigger(binding):
+    """A flat action becomes the tap. The other gestures copy its switch."""
+    if not isinstance(binding, dict):
+        raise ValueError("trigger must be an object")
+    if "tap" in binding or "double_tap" in binding or "long_press" in binding:
+        upgraded = {}
+        for name in ("tap", "double_tap", "long_press"):
+            gesture = binding.get(name)
+            if not isinstance(gesture, dict):
+                raise ValueError("gesture must be an object")
+            upgraded[name] = _gesture(gesture)
+        return upgraded
+    return {
+        "tap": _gesture(binding),
+        "double_tap": _gesture({"enabled": binding.get("enabled", True)}),
+        "long_press": _gesture({"enabled": binding.get("enabled", True)}),
+    }
+
+
+def _gesture(binding):
+    enabled = binding.get("enabled", True)
+    if not isinstance(enabled, bool):
+        raise ValueError("enabled must be a boolean")
+    return {
+        "action": binding.get("action"),
+        "phrase": text_of(binding.get("phrase") or u""),
+        "motion": binding.get("motion"),
+        "enabled": enabled,
+    }
+
+
+def gesture_action(trigger, gesture):
+    if not isinstance(trigger, dict):
+        return None
+    if "tap" not in trigger and "action" in trigger:
+        trigger = upgrade_trigger(trigger)
+    return action_for(trigger.get(gesture))
+
+
 def action_for(binding):
-    """Return the autostart action for one trigger, or None when it is inert."""
+    """Return the autostart action for one gesture, or None when it is inert."""
     if not isinstance(binding, dict) or not binding.get("enabled", True):
         return None
     action = binding.get("action")
@@ -113,6 +166,8 @@ def action_for(binding):
         return ("motion", binding.get("motion"))
     if action == "stop_motion":
         return ("stop_motion",)
+    if action in ("dialog_next", "dialog_repeat", "dialog_previous"):
+        return (action,)
     return None
 
 
