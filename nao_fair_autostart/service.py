@@ -210,10 +210,11 @@ class Service(object):
         self._stop_motion()
 
     def _move(self, name):
-        self._motion_stop.set()
+        # A second press must not cancel the gesture. Cancelling skips the
+        # return, and the next one then treats the end pose as home.
         worker = self._worker
         if worker is not None and worker.is_alive():
-            worker.join(1.0)
+            return
         self._motion_stop = threading.Event()
         stop = self._motion_stop
 
