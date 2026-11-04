@@ -30,7 +30,7 @@ class EngineTest(unittest.TestCase):
         effects = engine.load(armed_document())
         self.assertEqual(effects, ["apply_audio", "disable_life"])
         self.assertIsNone(engine.press("front_head"))
-        self.assertEqual(engine.press("middle_head"), ("speak", "Hallo"))
+        self.assertEqual(engine.press("middle_head"), ("speak", "Hallo", "plain", None))
         self.assertEqual(engine.press("right_hand"), ("stop_speech",))
         self.assertEqual(engine.press("left_bumper"), ("motion", "wave_left"))
 
@@ -48,7 +48,7 @@ class EngineTest(unittest.TestCase):
         self.assertEqual(engine.tick(30), [])
         effects = engine.tick(31)
         self.assertEqual(effects, ["stop_all", "apply_audio", "disable_life"])
-        self.assertEqual(engine.press("middle_head"), ("speak", "Hallo"))
+        self.assertEqual(engine.press("middle_head"), ("speak", "Hallo", "plain", None))
 
     def test_an_explicit_release_resumes_immediately(self):
         engine = AutostartEngine(timeout=20)

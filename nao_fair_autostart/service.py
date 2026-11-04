@@ -68,6 +68,8 @@ class Service(object):
         self._speech_key = None
         self._speech_gen = 0
         self._speech_running = False
+        self._voice = None
+        self._accompanying = False
         self._lock = threading.Lock()
         self._touch = TouchClassifier()
         self._position = None
@@ -139,12 +141,19 @@ class Service(object):
         action = self.engine.press(sensor_id, gesture)
         if action is None:
             return
+        if action[0] == "dialog_reset":
+            phrase = action[1] if len(action) > 1 else u""
+            self._reset_dialog(phrase)
+            return
         if action[0] in ("dialog_next", "dialog_repeat", "dialog_previous"):
-            self._play_dialog(action[0])
+            yields = action[1] if len(action) > 1 else True
+            self._play_dialog(action[0], yields)
             return
         self._start_action(action, (sensor_id, gesture))
 
-    def _play_dialog(self, action):
+    def _play_dialog(self, action, yields=True):
+        if action == "dialog_next" and yields and self._line_speaking():
+            return
         assignment = self.engine.assignment or {}
         dialog = active_dialog(assignment.get("dialogs"), assignment.get("active_dialog_id"))
         line = step(dialog, self._position, action)
@@ -156,6 +165,48 @@ class Service(object):
         self._position = position_for(dialog.get("id"), line.get("id"), self._position)
         self._store_position()
         self._arm_idle()
+
+    def _reset_dialog(self, phrase):
+        assignment = self.engine.assignment or {}
+        dialog = active_dialog(assignment.get("dialogs"), assignment.get("active_dialog_id"))
+        if dialog is None:
+            return
+        if self._accompanying and self._line_or_phrase_speaking():
+            self._release_accompanying_motion()
+        self._accompanying = False
+        self._stop_speech()
+        self._position = None
+        self._store_position()
+        self._idle_deadline = None
+        text = fold_phrase(phrase, assignment.get("replacements")).strip()
+        if not text:
+            return
+        self._enqueue_speech(("announcement", time.time()), text, "plain", None, "announcement")
+
+    def _line_speaking(self):
+        return self._voice == "line" and self._call_running()
+
+    def _line_or_phrase_speaking(self):
+        return self._voice in ("line", "phrase", "announcement") and self._call_running()
+
+    def _call_running(self):
+        call = self._speech_call
+        if call is None:
+            return False
+        for name in ("isRunning", "is_running"):
+            fn = getattr(call, name, None)
+            if callable(fn):
+                try:
+                    return bool(fn())
+                except Exception:
+                    return False
+        finished = getattr(call, "isFinished", None)
+        if callable(finished):
+            try:
+                return not bool(finished())
+            except Exception:
+                return False
+        return self._voice is not None
 
     def _on_assignment(self, seq):
         try:
@@ -239,7 +290,9 @@ class Service(object):
             self._stop_motion()
             return
         if kind == "speak":
-            self._enqueue_speech(key or ("phrase", action[1]), action[1])
+            delivery = action[2] if len(action) > 2 else "plain"
+            motion = action[3] if len(action) > 3 else None
+            self._enqueue_speech(key or ("phrase", action[1]), action[1], delivery, motion, "phrase")
             return
         if kind == "motion":
             self._move(action[1])
@@ -248,12 +301,13 @@ class Service(object):
         with self._lock:
             self._enqueue_speech(("phrase", phrase), phrase)
 
-    def _enqueue_speech(self, key, phrase):
+    def _enqueue_speech(self, key, phrase, delivery="plain", motion=None, kind="phrase"):
         # The caller holds ``_lock``. The same trigger waits at most once.
         # A different trigger is spoken after the one already playing.
-        if key == self._speech_key or any(item[0] == key for item in self._speech_queue):
+        # An announcement uses a fresh key, so a second reset speaks again.
+        if kind != "announcement" and (key == self._speech_key or any(item[0] == key for item in self._speech_queue)):
             return
-        self._speech_queue.append((key, phrase))
+        self._speech_queue.append((key, phrase, delivery, motion, kind))
         if self._speech_running:
             return
         self._speech_running = True
@@ -268,21 +322,36 @@ class Service(object):
                 if not self._speech_queue:
                     self._speech_key = None
                     self._speech_running = False
+                    if self._voice in ("phrase", "announcement"):
+                        self._voice = None
                     return
-                key, phrase = self._speech_queue.pop(0)
+                key, phrase, delivery, motion, kind = self._speech_queue.pop(0)
                 self._speech_key = key
+                self._voice = kind
                 gen = self._speech_gen
-                future = self._post_plain(phrase)
+            if delivery == "motion" and motion:
+                self._accompanying = True
+                self._move(motion)
+            future = self._post_phrase(phrase, delivery)
             self._wait_speech(future)
             with self._lock:
                 if gen != self._speech_gen:
                     continue
+                if self._voice == kind:
+                    self._accompanying = False
 
     def _post_plain(self, phrase):
+        return self._post_phrase(phrase, "plain")
+
+    def _post_phrase(self, phrase, delivery):
         pairs = (self.engine.assignment or {}).get("replacements") or []
         text = fold_phrase(phrase, pairs)
         try:
-            self._speech_call = self.tts.say(text, _async=True)
+            if delivery == "animated":
+                animated = self.session.service("ALAnimatedSpeech")
+                self._speech_call = animated.say(text, _async=True)
+            else:
+                self._speech_call = self.tts.say(text, _async=True)
             return self._speech_call
         except Exception:
             logger.exception("Could not speak")
@@ -301,12 +370,16 @@ class Service(object):
 
     def _speak_line(self, text, delivery, motion):
         self._stop_speech()
+        self._voice = "line"
         if delivery == "motion" and motion:
+            self._accompanying = True
             self._stop_motion()
             worker = self._worker
             if worker is not None and worker.is_alive():
                 worker.join(0.2)
             self._move(motion)
+        else:
+            self._accompanying = False
         try:
             if delivery == "animated":
                 animated = self.session.service("ALAnimatedSpeech")
@@ -318,12 +391,14 @@ class Service(object):
             return True
         except Exception:
             logger.exception("Could not speak")
+            self._voice = None
             return False
 
     def _stop_speech(self):
         self._speech_gen += 1
         self._speech_queue = []
         self._speech_key = None
+        self._voice = None
         try:
             self.tts.stopAll()
         except Exception:
@@ -331,6 +406,17 @@ class Service(object):
 
     def _stop_motion(self):
         self._motion_stop.set()
+        try:
+            self.motion.stopMove()
+        except Exception:
+            logger.exception("Could not stop motion")
+
+    def _release_accompanying_motion(self):
+        """Cut the keyframes so the gesture can return and go limp.
+
+        The stop flag would skip that return and leave the chain stiff.
+        A Bewegung gesture does not use this; it keeps the stop flag.
+        """
         try:
             self.motion.stopMove()
         except Exception:

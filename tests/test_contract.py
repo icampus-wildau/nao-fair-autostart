@@ -61,7 +61,23 @@ class AssignmentTest(unittest.TestCase):
         self.assertEqual(action_for({"action": "stop_conversation", "enabled": True}), ("stop_speech",))
         self.assertEqual(
             action_for({"action": "speak", "phrase": "Hallo", "enabled": True}),
-            ("speak", "Hallo"),
+            ("speak", "Hallo", "plain", None),
+        )
+        self.assertEqual(
+            action_for({"action": "speak", "phrase": "Hallo", "enabled": True, "delivery": "motion", "motion": "nod"}),
+            ("speak", "Hallo", "motion", "nod"),
+        )
+        self.assertEqual(
+            action_for({"action": "dialog_next", "enabled": True}),
+            ("dialog_next", True),
+        )
+        self.assertEqual(
+            action_for({"action": "dialog_next", "enabled": True, "yield_next": False}),
+            ("dialog_next", False),
+        )
+        self.assertEqual(
+            action_for({"action": "dialog_reset", "enabled": True, "phrase": " Nochmal "}),
+            ("dialog_reset", u" Nochmal "),
         )
         self.assertIsNone(action_for({"action": "speak", "phrase": "  ", "enabled": True}))
         self.assertIsNone(action_for({"action": "speak", "phrase": "Hallo", "enabled": False}))

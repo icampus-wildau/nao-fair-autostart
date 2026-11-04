@@ -134,11 +134,19 @@ def _gesture(binding):
     enabled = binding.get("enabled", True)
     if not isinstance(enabled, bool):
         raise ValueError("enabled must be a boolean")
+    yields = binding.get("yield_next", True)
+    if not isinstance(yields, bool):
+        raise ValueError("yield_next must be a boolean")
+    delivery = binding.get("delivery") or "plain"
+    if delivery not in ("plain", "motion", "animated"):
+        raise ValueError("delivery is invalid")
     return {
         "action": binding.get("action"),
         "phrase": text_of(binding.get("phrase") or u""),
         "motion": binding.get("motion"),
         "enabled": enabled,
+        "delivery": delivery,
+        "yield_next": yields,
     }
 
 
@@ -159,14 +167,22 @@ def action_for(binding):
         phrase = text_of(binding.get("phrase") or u"")
         if not phrase.strip():
             return None
-        return ("speak", phrase)
+        delivery = binding.get("delivery") or "plain"
+        if delivery not in ("plain", "motion", "animated"):
+            delivery = "plain"
+        motion = binding.get("motion") if delivery == "motion" else None
+        return ("speak", phrase, delivery, motion)
     if action in ("stop_speech", "stop_conversation"):
         return ("stop_speech",)
     if action == "motion" and binding.get("motion") in MOTIONS:
         return ("motion", binding.get("motion"))
     if action == "stop_motion":
         return ("stop_motion",)
-    if action in ("dialog_next", "dialog_repeat", "dialog_previous"):
+    if action == "dialog_next":
+        return (action, binding.get("yield_next", True) is not False)
+    if action == "dialog_reset":
+        return (action, text_of(binding.get("phrase") or u""))
+    if action in ("dialog_repeat", "dialog_previous"):
         return (action,)
     return None
 
