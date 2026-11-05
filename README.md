@@ -14,6 +14,9 @@ While the app is connected it renews a lease through NAOqi about once a second, 
 
 Hold both foot bumpers together for at least two seconds to toggle the stored autostart switch. The robot announces `Autostart ein` or `Autostart aus`. Release both bumpers before toggling again. The app adopts the robot's switch when connecting and reflects changes made while connected.
 
+The second bumper must join before either individual long press. The chord
+consumes both bumper gestures and works while the app holds the trigger lease.
+
 On its own it speaks with the robot's TTS, stops speech, steps through a stored dialog, waves, nods, shakes, sits, stands, and stops a gesture. `stop_conversation` (Gespräch beenden) only stops speech. `start_conversation`, `toggle_conversation`, and `stop_and_clear` do nothing here.
 
 The NAO Fair app installs this process from its system tab. A robot without it still accepts a connection. The app then reports that the autostart assignment was not stored.
@@ -75,3 +78,17 @@ ssh nao@ROBOT_IP tail -f /home/nao/nao-fair-autostart/run_forever.log
 | `NAOFair/Autostart/ArmedState` | Robot | Stored switch and change identifier |
 
 There is no extra secret. Anyone who can already reach NAOqi can already make the robot speak.
+
+## Development
+
+Domain terms, playback rules, and handoff decisions are shared with the server:
+[glossary](https://github.com/icampus-wildau/nao-fair-server/blob/main/GLOSSARY.md),
+[behavior](https://github.com/icampus-wildau/nao-fair-server/blob/main/docs/behavior.md),
+[ADRs](https://github.com/icampus-wildau/nao-fair-server/tree/main/docs/adr).
+Keep `touch.py` and `dialog.py` aligned with their server counterparts, and the
+assignment/lease contract aligned with the server's `robot/autostart.py`.
+Robot source must remain Python 2.7 compatible; tests also run on Python 3.12:
+
+```bash
+python -m unittest discover -s tests -v
+```
