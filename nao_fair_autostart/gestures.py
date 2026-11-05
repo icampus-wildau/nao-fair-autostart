@@ -81,7 +81,11 @@ def play(motion, posture, name, stopped):
     try:
         if stopped():
             return
-        motion.angleInterpolation(names, angles, spec["times"], True)
+        try:
+            motion.angleInterpolation(names, angles, spec["times"], True)
+        except Exception:
+            if stopped():
+                return
         if stopped() or not spec["return_secs"]:
             return
         motion.angleInterpolation(

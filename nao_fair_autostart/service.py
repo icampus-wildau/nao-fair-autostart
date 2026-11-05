@@ -6,15 +6,18 @@ import qi, so the decision logic can be tested on a laptop.
 
 from __future__ import print_function
 
+import copy
 import json
 import logging
 import os
 import threading
 import time
+import uuid
 
 from nao_fair_autostart.contract import basestring_type
 from nao_fair_autostart.contract import (
     ACK_SEQ,
+    ARMED_STATE,
     ASSIGNMENT,
     ASSIGNMENT_SEQ,
     LEASE_ACK_SEQ,
@@ -75,12 +78,20 @@ class Service(object):
         self._position = None
         self._idle_deadline = None
         self._writing_position = False
+        self._bumpers = {}
+        self._bumper_chord = False
+        self._bumper_pair = False
+        self._last_line_at = None
+        self._arm_change = uuid.uuid4().hex
+        self._heartbeat = time.time()
     def start(self):
         self._publish_version()
         self._clear_position()
         stored = _read_quietly(self.store_path)
         if stored is not None:
+            self._arm_change = stored.get("_arm_change_id") or self._arm_change
             self._apply(self.engine.load(stored))
+        self._publish_armed()
         for sensor_id in _SENSOR_IDS:
             self._subscribe(memory_event(sensor_id), self._pressed(sensor_id))
         self._subscribe(ASSIGNMENT_SEQ, self._on_assignment)
@@ -89,6 +100,26 @@ class Service(object):
         ticker = threading.Thread(target=self._tick)
         ticker.daemon = True
         ticker.start()
+        watchdog = threading.Thread(target=self._watchdog)
+        watchdog.daemon = True
+        watchdog.start()
+
+    def _watchdog(self, terminate=None, now=None):
+        terminate = terminate or os._exit
+        now = now or time.time
+        while not self._stop.wait(5.0):
+            if now() - self._heartbeat > 30.0:
+                logger.error("Autostart stalled; restarting process")
+                terminate(1)
+                return
+
+    def _publish_armed(self):
+        document = self.engine.assignment
+        value = "" if not document else json.dumps({"armed": document["armed"], "change": self._arm_change})
+        try:
+            self.memory.insertData(ARMED_STATE, value)
+        except Exception:
+            logger.exception("Could not publish autostart switch")
 
     def _publish_version(self):
         home = os.path.dirname(self.store_path)
@@ -117,6 +148,26 @@ class Service(object):
         def callback(value):
             now = self.now()
             with self._lock:
+                if sensor_id in ("left_bumper", "right_bumper"):
+                    if value:
+                        if sensor_id not in self._bumpers:
+                            self._bumpers[sensor_id] = now
+                        if len(self._bumpers) == 2 and now - min(self._bumpers.values()) < 0.6:
+                            self._bumper_pair = True
+                            self._touch.discard("left_bumper")
+                            self._touch.discard("right_bumper")
+                        if self._bumper_pair:
+                            return
+                    else:
+                        self._bumpers.pop(sensor_id, None)
+                        if self._bumper_pair:
+                            self._touch.discard(sensor_id)
+                            if not self._bumpers:
+                                self._bumper_chord = False
+                                self._bumper_pair = False
+                            return
+                if self.engine.suppressed:
+                    return
                 if value:
                     gesture = self._touch.down(sensor_id, now)
                 else:
@@ -160,11 +211,32 @@ class Service(object):
         if line is None or dialog is None:
             return
         text = fold_phrase(line.get("text") or u"", assignment.get("replacements"))
+        previous = self._position
         if not self._speak_line(text, line.get("delivery") or "plain", line.get("motion")):
             return
         self._position = position_for(dialog.get("id"), line.get("id"), self._position)
         self._store_position()
+        self._last_line_at = self.now()
         self._arm_idle()
+        future = self._speech_call
+        if callable(getattr(future, "wait", None)) and callable(getattr(future, "hasError", None)):
+            expected = self._position
+            generation = self._speech_gen
+            def check_result():
+                try:
+                    future.wait()
+                    failed = future.hasError()
+                except Exception:
+                    failed = True
+                if failed:
+                    with self._lock:
+                        if self._speech_gen == generation and self._position == expected:
+                            self._position = previous
+                            self._store_position()
+                            self._arm_idle()
+            watcher = threading.Thread(target=check_result)
+            watcher.daemon = True
+            watcher.start()
 
     def _reset_dialog(self, phrase):
         assignment = self.engine.assignment or {}
@@ -209,14 +281,21 @@ class Service(object):
         return self._voice is not None
 
     def _on_assignment(self, seq):
-        try:
-            document = parse_assignment(self.memory.getData(ASSIGNMENT))
-            write_assignment(self.store_path, document)
-        except Exception:
-            logger.exception("Could not store the autostart assignment")
-            return
         with self._lock:
+            try:
+                document = parse_assignment(self.memory.getData(ASSIGNMENT))
+                expected = document.pop("_expected_arm_change_id", None)
+                if expected is not None and expected != self._arm_change:
+                    logger.warning("Assignment used an outdated autostart switch")
+                    return
+                document["_arm_change_id"] = self._arm_change
+                write_assignment(self.store_path, document)
+            except Exception:
+                logger.exception("Could not store the autostart assignment")
+                return
             self._apply(self.engine.load(document))
+            self._publish_armed()
+            self._arm_idle()
             for sensor_id, gesture in self._touch.flush(self.now(), self._double_tap_armed):
                 self._run_gesture(sensor_id, gesture)
         self._raise(ACK_SEQ, int(seq))
@@ -233,12 +312,16 @@ class Service(object):
                 effects = self.engine.release(now)
             else:
                 effects = self.engine.hold(int(seq), now)
+            self._touch = TouchClassifier()
             self._apply(effects)
-            if command != "release":
-                worker = self._worker
-                if worker is not None and worker.is_alive():
-                    worker.join()
-                self._raise(LEASE_ACK_SEQ, int(seq))
+            worker = self._worker
+        if command != "release":
+            if worker is not None and worker.is_alive():
+                worker.join(5.0)
+                if worker.is_alive():
+                    logger.error("Motion did not stop; lease not acknowledged")
+                    return
+            self._raise(LEASE_ACK_SEQ, int(seq))
 
     def _tick(self):
         lease_at = 0
@@ -246,14 +329,49 @@ class Service(object):
             self._stop.wait(0.05)
             if self._stop.is_set():
                 return
-            now = self.now()
-            with self._lock:
-                for sensor_id, gesture in self._touch.tick(now):
-                    self._run_gesture(sensor_id, gesture)
-                self._idle_due(now)
-                if now - lease_at >= 1:
-                    lease_at = now
-                    self._apply(self.engine.tick(now))
+            try:
+                now = self.now()
+                with self._lock:
+                    self._check_bumpers(now)
+                    for sensor_id, gesture in self._touch.tick(now):
+                        self._run_gesture(sensor_id, gesture)
+                    self._idle_due(now)
+                    if now - lease_at >= 1:
+                        lease_at = now
+                        self._apply(self.engine.tick(now))
+                        self._publish_armed()
+                self._heartbeat = time.time()
+            except Exception:
+                self._heartbeat = time.time()
+                logger.exception("Autostart background tick failed")
+
+    def _check_bumpers(self, now):
+        if self._bumper_chord or not self._bumper_pair or len(self._bumpers) != 2:
+            return
+        if now - max(self._bumpers.values()) < 2.0:
+            return
+        self._bumper_chord = True
+        self._touch.discard("left_bumper")
+        self._touch.discard("right_bumper")
+        if not self.engine.assignment:
+            return
+        document = copy.deepcopy(self.engine.assignment)
+        document["armed"] = not document["armed"]
+        change = uuid.uuid4().hex
+        document["_arm_change_id"] = change
+        try:
+            write_assignment(self.store_path, document)
+        except Exception:
+            logger.exception("Could not save autostart switch")
+            return
+        if not self.engine.suppressed:
+            self._halt()
+        else:
+            self._stop_speech()
+        self._arm_change = change
+        self._apply(self.engine.load(document))
+        self._publish_armed()
+        self._enqueue_speech(("arm", now), "Autostart ein" if document["armed"] else "Autostart aus", kind="announcement")
 
     def _apply(self, effects):
         for effect in effects:
@@ -329,10 +447,13 @@ class Service(object):
                 self._speech_key = key
                 self._voice = kind
                 gen = self._speech_gen
-            if delivery == "motion" and motion:
-                self._accompanying = True
-                self._move(motion)
-            future = self._post_phrase(phrase, delivery)
+            with self._lock:
+                if gen != self._speech_gen:
+                    continue
+                if delivery == "motion" and motion:
+                    self._accompanying = True
+                    self._move(motion)
+                future = self._post_phrase(phrase, delivery)
             self._wait_speech(future)
             with self._lock:
                 if gen != self._speech_gen:
@@ -388,6 +509,17 @@ class Service(object):
                 # session.service() returns a qi object. It has no ALProxy .post.
                 # The future cancels the utterance if nothing keeps it alive.
                 self._speech_call = self.tts.say(text, _async=True)
+            call = self._speech_call
+            finished = getattr(call, "isFinished", None)
+            has_error = getattr(call, "hasError", None)
+            if callable(finished) and finished() and callable(has_error) and has_error():
+                self._voice = None
+                return False
+            if callable(has_error) and not callable(finished):
+                running = getattr(call, "isRunning", None)
+                if callable(running) and not running() and has_error():
+                    self._voice = None
+                    return False
             return True
         except Exception:
             logger.exception("Could not speak")
@@ -408,6 +540,9 @@ class Service(object):
         self._motion_stop.set()
         try:
             self.motion.stopMove()
+            kill = getattr(self.motion, "killTasksUsingResources", None)
+            if callable(kill) and self._worker is not None and self._worker.is_alive():
+                kill(["Head", "LArm", "RArm"])
         except Exception:
             logger.exception("Could not stop motion")
 
@@ -419,6 +554,9 @@ class Service(object):
         """
         try:
             self.motion.stopMove()
+            kill = getattr(self.motion, "killTasksUsingResources", None)
+            if callable(kill) and self._worker is not None and self._worker.is_alive():
+                kill(["Head", "LArm", "RArm"])
         except Exception:
             logger.exception("Could not stop motion")
 
@@ -470,7 +608,6 @@ class Service(object):
     def _store_position(self):
         payload = "" if not self._position else json.dumps(self._position)
         seq = 0 if not self._position else int(self._position.get("seq") or 0)
-        self._write_position_file(payload)
         self._writing_position = True
         try:
             self.memory.insertData(POSITION, payload)
@@ -479,22 +616,6 @@ class Service(object):
             logger.exception("Could not store the dialog position")
         finally:
             self._writing_position = False
-
-    def _write_position_file(self, payload):
-        path = self._position_path()
-        directory = os.path.dirname(path)
-        if directory and not os.path.isdir(directory):
-            os.makedirs(directory)
-        temporary = path + ".tmp"
-        handle = open(temporary, "wb")
-        try:
-            text = payload
-            if not isinstance(text, bytes):
-                text = text.encode("utf-8")
-            handle.write(text)
-        finally:
-            handle.close()
-        os.rename(temporary, path)
 
     def _on_position(self, seq):
         del seq
@@ -507,13 +628,11 @@ class Service(object):
             return
         position = _parse_position(raw)
         with self._lock:
-            current = None if not self._position else self._position.get("seq")
-            incoming = None if not position else position.get("seq")
-            if incoming == current:
+            if position == self._position:
                 return
             self._position = position
-            self._write_position_file("" if not position else json.dumps(position))
             if position:
+                self._last_line_at = self.now()
                 self._arm_idle()
             else:
                 self._idle_deadline = None
@@ -525,7 +644,7 @@ class Service(object):
         if not secs or not self._position:
             self._idle_deadline = None
             return
-        self._idle_deadline = self.now() + float(secs)
+        self._idle_deadline = (self._last_line_at if self._last_line_at is not None else self.now()) + float(secs)
 
     def _idle_due(self, now):
         if self._idle_deadline is None or now < self._idle_deadline:

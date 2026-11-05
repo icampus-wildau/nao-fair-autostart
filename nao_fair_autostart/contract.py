@@ -19,6 +19,7 @@ LEASE_COMMAND = "NAOFair/Autostart/LeaseCommand"
 LEASE_SEQ = "NAOFair/Autostart/LeaseSeq"
 LEASE_ACK_SEQ = "NAOFair/Autostart/LeaseAckSeq"
 VERSION = "NAOFair/Autostart/Version"
+ARMED_STATE = "NAOFair/Autostart/ArmedState"
 
 LEASE_TIMEOUT_SECS = 20.0
 
@@ -81,6 +82,18 @@ def parse_assignment(raw):
     dialogs = data.get("dialogs", [])
     if not isinstance(dialogs, list):
         raise ValueError("dialogs must be a list")
+    for dialog in dialogs:
+        if not isinstance(dialog, dict) or not isinstance(dialog.get("id"), basestring_type()) or not dialog.get("id"):
+            raise ValueError("dialog is invalid")
+        lines = dialog.get("lines", [])
+        if not isinstance(lines, list):
+            raise ValueError("dialog lines must be a list")
+        for line in lines:
+            if not isinstance(line, dict) or not isinstance(line.get("id"), basestring_type()) or not line.get("id") or not isinstance(line.get("text"), basestring_type()):
+                raise ValueError("dialog line is invalid")
+        idle = dialog.get("idle_reset_secs")
+        if idle is not None and (isinstance(idle, bool) or not isinstance(idle, (int, float)) or not 0 < idle <= 86400):
+            raise ValueError("dialog idle timeout is invalid")
     data["dialogs"] = dialogs
     active = data.get("active_dialog_id")
     if active is not None and not isinstance(active, basestring_type()):

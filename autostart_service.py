@@ -7,6 +7,7 @@ import argparse
 import logging
 import os
 import sys
+import threading
 import time
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -57,7 +58,16 @@ def main(argv):
             time.sleep(2)
     from nao_fair_autostart.service import Service
 
+    started = threading.Event()
+    def watch_startup():
+        if not started.wait(45.0):
+            logger.error("Autostart initialization stalled; restarting process")
+            os._exit(1)
+    watchdog = threading.Thread(target=watch_startup)
+    watchdog.daemon = True
+    watchdog.start()
     Service(session, os.path.join(args.home, "assignment.json")).start()
+    started.set()
     logger.info("NAO Fair autostart is running")
     application.run()
     return 0

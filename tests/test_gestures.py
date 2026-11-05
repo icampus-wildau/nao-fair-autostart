@@ -65,6 +65,20 @@ class GesturePlayTest(unittest.TestCase):
         self.assertEqual(motion.commands[2][2], [[0.05]])
         self.assertEqual(motion.commands[-1], ("stiff", "Head", 0.0))
 
+    def test_interrupted_keyframes_return_home_and_release_stiffness(self):
+        class Interrupted(_Motion):
+            def angleInterpolation(self, names, angles, times, is_absolute):
+                if not any(item[0] == "interrupted" for item in self.commands):
+                    self.commands.append(("interrupted",))
+                    raise RuntimeError("motion task killed")
+                return _Motion.angleInterpolation(self, names, angles, times, is_absolute)
+
+        motion = Interrupted([0.05], {"HeadPitch": (-0.67, 0.51)})
+        play(motion, None, "nod", lambda: False)
+        moves = [item for item in motion.commands if item[0] == "move"]
+        self.assertEqual(moves[0][2], [[0.05]])
+        self.assertEqual(motion.commands[-1], ("stiff", "Head", 0.0))
+
     def test_return_clamps_a_sensor_angle_the_robot_would_reject(self):
         # A limp elbow often reads past the command limit. angleInterpolation
         # then rejects the whole return, and the arm stays at the end of the wave.

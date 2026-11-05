@@ -71,12 +71,17 @@ fi
 if [ -z "${NAO_FAIR_AUTOSTART_CHILD:-}" ]; then
   if [ -f "$PIDFILE" ]; then
     old=$(cat "$PIDFILE")
-    if kill -0 "$old" 2>/dev/null; then
+    old_cmd=$(tr '\0' ' ' < "/proc/$old/cmdline" 2>/dev/null || true)
+    case "$old_cmd" in
+      *"$AUTOSTART_HOME/run_forever.sh"*) running=yes ;;
+      *) running=no ;;
+    esac
+    if [ "$running" = yes ] && kill -0 "$old" 2>/dev/null; then
       echo "NAO Fair autostart restart loop already running ($old)."
       exit 0
     fi
   fi
-  NAO_FAIR_AUTOSTART_CHILD=1 nohup "$0" >>"$LOGFILE" 2>&1 &
+  NAO_FAIR_AUTOSTART_CHILD=1 nohup "$AUTOSTART_HOME/run_forever.sh" >>"$LOGFILE" 2>&1 &
   echo $! > "$PIDFILE"
   exit 0
 fi

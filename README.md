@@ -12,6 +12,8 @@ The process runs in the NAO's Python 2.7, the same way as the [websocket bridge 
 
 While the app is connected it renews a lease through NAOqi about once a second, and this process ignores triggers. An explicit release, or 20 seconds without a renewal, hands the triggers back. The assignment is `assignment.json` under `/home/nao/nao-fair-autostart/`, so it survives a reboot. ALMemory is only the live channel.
 
+Hold both foot bumpers together for at least two seconds to toggle the stored autostart switch. The robot announces `Autostart ein` or `Autostart aus`. Release both bumpers before toggling again. The app adopts the robot's switch when connecting and reflects changes made while connected.
+
 On its own it speaks with the robot's TTS, stops speech, steps through a stored dialog, waves, nods, shakes, sits, stands, and stops a gesture. `stop_conversation` (Gespräch beenden) only stops speech. `start_conversation`, `toggle_conversation`, and `stop_and_clear` do nothing here.
 
 The NAO Fair app installs this process from its system tab. A robot without it still accepts a connection. The app then reports that the autostart assignment was not stored.
@@ -70,5 +72,6 @@ ssh nao@ROBOT_IP tail -f /home/nao/nao-fair-autostart/run_forever.log
 | `NAOFair/Dialog/Position` | Both | JSON dialog position |
 | `NAOFair/Dialog/PositionSeq` | Both | Integer bumped when the position changes |
 | `NAOFair/Autostart/Version` | Robot | Installed autostart version |
+| `NAOFair/Autostart/ArmedState` | Robot | Stored switch and change identifier |
 
 There is no extra secret. Anyone who can already reach NAOqi can already make the robot speak.
